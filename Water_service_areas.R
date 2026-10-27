@@ -19,6 +19,7 @@ library(jsonlite)
 library(arcgislayers)
 library(haven)
 library(ggplot2)
+library(stringr)
 
 setwd("/Users/tylermcdaniel/Library/CloudStorage/GoogleDrive-tylermc@stanford.edu/My Drive/ARPA-H/")
 
@@ -86,10 +87,25 @@ pws_df <- full_join(service_areas_clean,
 
 # how many wsids are linked to information on inorganic contaminants?
 
+# join with anne nigra's data
+ravali_2021 <- read_xlsx("Test_data_files/Water_quality/Ravalli_2021_datasets_and_codebook.xlsx",
+                         sheet = "CWSLevel")
+
+# clean to match other datasets
+ravali_2021 %<>%
+  rename_with(~ str_replace_all(tolower(.), "\\.", "_"))
+
+
+# join with water data
+pws_df %<>%
+  left_join(ravali_2021)
+
 
 # how many are missing?
+table(is.na(pws_df$asavg20082011)) # arsenic data for 33,267 water systems
 
-
+# how much population does this cover?
+sum(pws_df$adjusted_total_population_served[!is.na(pws_df$asavg20062011)], na.rm = T) # arsenic data for roughly 258674721 people 
 
 # what pct of total population is represented by boundary data?
 

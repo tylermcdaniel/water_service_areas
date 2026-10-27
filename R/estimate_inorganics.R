@@ -157,8 +157,7 @@ summarize_lead_copper <- function(samples) {
     lead_mean_90th = numeric(), lead_n_ale = integer(),
     copper_n_90th = integer(), copper_latest_date = as.Date(character()),
     copper_latest_90th = numeric(), copper_max_90th = numeric(),
-    copper_mean_90th = numeric(), copper_n_ale = integer(),
-    lead_trend_per_year = numeric(), copper_trend_per_year = numeric()
+    copper_mean_90th = numeric(), copper_n_ale = integer()
   )
   if (nrow(samples) == 0) return(template)
 
@@ -171,24 +170,14 @@ summarize_lead_copper <- function(samples) {
       max_90th = max(value),
       mean_90th = mean(value),
       n_ale = sum(value > action_level),
-      trend_per_year = trend_slope(date, value),
       .groups = "drop"
     ) |>
     pivot_wider(
       names_from = metal,
-      values_from = c(n_90th, latest_date, latest_90th, max_90th, mean_90th,
-                      n_ale, trend_per_year),
+      values_from = c(n_90th, latest_date, latest_90th, max_90th, mean_90th, n_ale),
       names_glue = "{metal}_{.value}"
     )
   bind_rows(template, summary)
-}
-
-# Least-squares change in value per year (mg/L/yr). Needs results from at least
-# three distinct dates; otherwise NA.
-trend_slope <- function(date, value) {
-  t <- as.numeric(date) / 365.25
-  if (length(unique(t)) < 3) return(NA_real_)
-  unname(coef(lm(value ~ t))[2])
 }
 
 # SDWIS reports LCR results in mg/L or ug/L.

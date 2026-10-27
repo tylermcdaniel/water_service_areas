@@ -5,7 +5,7 @@ This repo contains code to produce inorganic materials estimates for community w
 
 `R/estimate_inorganics.R` builds a per-system table of inorganic contaminant indicators for every active CWS:
 
-- **Lead and copper**: number of 90th percentile results, the latest and maximum values (mg/L), how many results exceeded the action level (lead 0.015 mg/L, copper 1.3 mg/L), and the trend in mg/L per year (`*_trend_per_year`, a least-squares slope; needs results on at least 3 dates).
+- **Lead and copper**: number of 90th percentile results, the latest and maximum values (mg/L), and how many results exceeded the action level (lead 0.015 mg/L, copper 1.3 mg/L).
 - **Inorganic chemicals (IOCs)**: number of violations and health-based violations for arsenic, nitrate/nitrite, fluoride, barium and the other regulated IOCs, with one count column per contaminant (`hb_*`).
 - **Service area**: each system's area (km²) and whether it matched a boundary polygon.
 

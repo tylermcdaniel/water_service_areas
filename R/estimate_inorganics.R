@@ -1,3 +1,9 @@
+################################################################################
+## purpose: gather EPA water inorganic contaminant data
+## author: tyler mcdaniel 
+## date created : 10/27/2026
+## date last modified: 
+################################################################################
 #!/usr/bin/env Rscript
 # Estimate inorganic contaminant levels for U.S. community water systems (CWS).
 #
@@ -24,8 +30,8 @@ suppressPackageStartupMessages({
 
 # ---- Configuration -----------------------------------------------------------
 
-RAW_DIR <- "data/raw"
-OUT_DIR <- "output"
+RAW_DIR <- "Test_data_files/data/raw"
+OUT_DIR <- "Test_data_files/output"
 
 # ECHO publishes SDWIS as a zip of CSVs, refreshed quarterly.
 SDWA_URL <- "https://echo.epa.gov/files/echodownloads/SDWA_latest_downloads.zip"
@@ -299,7 +305,14 @@ read_boundaries <- function(path = BOUNDARY_PATH, url = BOUNDARY_URL, states = N
       )
     }
   }
+  
+  sf_use_s2(FALSE) # temporarily suppress spherical checks
+  
   bnd <- st_read(path, quiet = TRUE)
+  
+  # make valid
+  bnd %<>%
+    st_make_valid()
 
   # Layers name the ID column differently (PWSID, pwsid, PWS_ID, ...).
   id_col <- grep("^pws_?id$", names(bnd), ignore.case = TRUE, value = TRUE)[1]

@@ -5,8 +5,8 @@
 #   1. Download EPA's SDWIS data (ECHO SDWA bulk download).
 #   2. Load CWS service area boundaries.
 #   3. Summarize, per system, lead/copper 90th percentile results and
-#      inorganic chemical (IOC) violations.
-#   4. Join the summaries to the boundaries and write a CSV and a GeoPackage.
+#      inorganic chemical (IOC) violations, overall and by calendar year.
+#   4. Join the summaries to the boundaries and write CSVs and a GeoPackage.
 #
 # Usage:
 #   Rscript R/estimate_inorganics.R              # all states
@@ -38,8 +38,9 @@ SDWA_URL <- "https://echo.epa.gov/files/echodownloads/SDWA_latest_downloads.zip"
 BOUNDARY_PATH <- Sys.getenv("WSA_BOUNDARIES", file.path(RAW_DIR, "cws_boundaries.gpkg"))
 BOUNDARY_URL <- Sys.getenv("WSA_BOUNDARY_URL", "")
 
-# Only use samples and violations from this many years before today.
-LOOKBACK_YEARS <- 10
+# Only use samples and violations from this many years before today. For
+# long-run trends, raise it (LCR results in SDWIS go back to the early 1990s).
+LOOKBACK_YEARS <- as.numeric(Sys.getenv("WSA_LOOKBACK_YEARS", "10"))
 
 # Lead and Copper Rule action levels (mg/L), applied to 90th percentile results.
 LEAD_ACTION_LEVEL <- 0.015
@@ -128,8 +129,8 @@ read_water_systems <- function(path, states = NULL) {
 
 # ---- Lead and copper ---------------------------------------------------------------
 
-summarize_lead_copper <- function(path, pwsids, since) {
-  samples <- read_filtered(
+read_lead_copper <- function(path, pwsids, since) {
+  read_filtered(
     path,
     keep = c("PWSID", "SAMPLING_END_DATE", "CONTAMINANT_CODE",
              "SAMPLE_MEASURE", "UNIT_OF_MEASURE"),
@@ -143,8 +144,11 @@ summarize_lead_copper <- function(path, pwsids, since) {
       metal = if_else(CONTAMINANT_CODE == "PB90", "lead", "copper"),
       action_level = if_else(metal == "lead", LEAD_ACTION_LEVEL, COPPER_ACTION_LEVEL)
     ) |>
-    filter(!is.na(value), !is.na(date), date >= since)
+    filter(!is.na(value), !is.na(date), date >= since) |>
+    select(PWSID, metal, date, value, action_level)
+}
 
+summarize_lead_copper <- function(samples) {
   # Template so every column exists even if a metal has no samples.
   template <- tibble(
     PWSID = character(),
@@ -153,7 +157,8 @@ summarize_lead_copper <- function(path, pwsids, since) {
     lead_mean_90th = numeric(), lead_n_ale = integer(),
     copper_n_90th = integer(), copper_latest_date = as.Date(character()),
     copper_latest_90th = numeric(), copper_max_90th = numeric(),
-    copper_mean_90th = numeric(), copper_n_ale = integer()
+    copper_mean_90th = numeric(), copper_n_ale = integer(),
+    lead_trend_per_year = numeric(), copper_trend_per_year = numeric()
   )
   if (nrow(samples) == 0) return(template)
 
@@ -166,14 +171,24 @@ summarize_lead_copper <- function(path, pwsids, since) {
       max_90th = max(value),
       mean_90th = mean(value),
       n_ale = sum(value > action_level),
+      trend_per_year = trend_slope(date, value),
       .groups = "drop"
     ) |>
     pivot_wider(
       names_from = metal,
-      values_from = c(n_90th, latest_date, latest_90th, max_90th, mean_90th, n_ale),
+      values_from = c(n_90th, latest_date, latest_90th, max_90th, mean_90th,
+                      n_ale, trend_per_year),
       names_glue = "{metal}_{.value}"
     )
   bind_rows(template, summary)
+}
+
+# Least-squares change in value per year (mg/L/yr). Needs results from at least
+# three distinct dates; otherwise NA.
+trend_slope <- function(date, value) {
+  t <- as.numeric(date) / 365.25
+  if (length(unique(t)) < 3) return(NA_real_)
+  unname(coef(lm(value ~ t))[2])
 }
 
 # SDWIS reports LCR results in mg/L or ug/L.
@@ -188,8 +203,8 @@ to_mg_l <- function(value, unit) {
 
 # ---- IOC violations --------------------------------------------------------------
 
-summarize_ioc_violations <- function(path, pwsids, since) {
-  viols <- read_filtered(
+read_ioc_violations <- function(path, pwsids, since) {
+  read_filtered(
     path,
     keep = c("PWSID", "VIOLATION_ID", "CONTAMINANT_CODE",
              "IS_HEALTH_BASED_IND", "NON_COMPL_PER_BEGIN_DATE"),
@@ -204,8 +219,11 @@ summarize_ioc_violations <- function(path, pwsids, since) {
       contaminant = unname(IOC_CODES[CONTAMINANT_CODE]),
       health_based = IS_HEALTH_BASED_IND == "Y"
     ) |>
-    filter(!is.na(date), date >= since)
+    filter(!is.na(date), date >= since) |>
+    select(PWSID, contaminant, date, health_based)
+}
 
+summarize_ioc_violations <- function(viols) {
   if (nrow(viols) == 0) {
     return(tibble(PWSID = character(), ioc_violations = integer(),
                   ioc_health_violations = integer(),
@@ -232,6 +250,47 @@ summarize_ioc_violations <- function(path, pwsids, since) {
                 names_prefix = "hb_", values_fill = 0)
 
   left_join(totals, by_contaminant, by = "PWSID")
+}
+
+# ---- Changes over time ------------------------------------------------------------
+
+# One row per system per calendar year. Violation counts are 0 in years without
+# violations; lead/copper columns are NA in years the system did not report a
+# 90th percentile (many systems sample only every three years).
+annual_panel <- function(pwsids, samples, viols, since) {
+  years <- seq(as.integer(format(since, "%Y")), as.integer(format(Sys.Date(), "%Y")))
+
+  lcr_year <- samples |>
+    mutate(year = as.integer(format(date, "%Y"))) |>
+    group_by(PWSID, year, metal) |>
+    summarize(
+      n_90th = n(),
+      max_90th = max(value),
+      n_ale = sum(value > action_level),
+      .groups = "drop"
+    ) |>
+    pivot_wider(names_from = metal, values_from = c(n_90th, max_90th, n_ale),
+                names_glue = "{metal}_{.value}")
+  for (col in c("lead_n_90th", "lead_max_90th", "lead_n_ale",
+                "copper_n_90th", "copper_max_90th", "copper_n_ale")) {
+    if (!col %in% names(lcr_year)) lcr_year[[col]] <- NA_real_
+  }
+
+  ioc_year <- viols |>
+    mutate(year = as.integer(format(date, "%Y"))) |>
+    group_by(PWSID, year) |>
+    summarize(
+      ioc_violations = n(),
+      ioc_health_violations = sum(health_based, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  expand_grid(PWSID = pwsids, year = years) |>
+    left_join(lcr_year, by = c("PWSID", "year")) |>
+    left_join(ioc_year, by = c("PWSID", "year")) |>
+    mutate(across(c(ioc_violations, ioc_health_violations), ~ coalesce(.x, 0L))) |>
+    select(PWSID, year, starts_with("lead_"), starts_with("copper_"),
+           starts_with("ioc_"))
 }
 
 # ---- Boundaries -------------------------------------------------------------------
@@ -283,11 +342,15 @@ estimate_inorganics <- function(states = NULL) {
   systems <- read_water_systems(paths[1], states)
   message("  ", nrow(systems), " active community water systems")
 
-  message("Summarizing lead and copper 90th percentiles since ", since)
-  lcr <- summarize_lead_copper(paths[2], systems$PWSID, since)
+  message("Reading lead and copper 90th percentiles since ", since)
+  samples <- read_lead_copper(paths[2], systems$PWSID, since)
+  lcr <- summarize_lead_copper(samples)
 
-  message("Summarizing IOC violations since ", since)
-  ioc <- summarize_ioc_violations(paths[3], systems$PWSID, since)
+  message("Reading IOC violations since ", since)
+  viols <- read_ioc_violations(paths[3], systems$PWSID, since)
+  ioc <- summarize_ioc_violations(viols)
+
+  panel <- annual_panel(systems$PWSID, samples, viols, since)
 
   estimates <- systems |>
     left_join(lcr, by = "PWSID") |>
@@ -311,13 +374,15 @@ estimate_inorganics <- function(states = NULL) {
 
   dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
   csv_path <- file.path(OUT_DIR, "cws_inorganics.csv")
+  panel_path <- file.path(OUT_DIR, "cws_inorganics_by_year.csv")
   gpkg_path <- file.path(OUT_DIR, "cws_inorganics.gpkg")
   write_csv(estimates, csv_path)
+  write_csv(panel, panel_path)
   boundaries |>
     select(PWSID) |>
     inner_join(select(estimates, -area_km2), by = "PWSID") |>
     st_write(gpkg_path, layer = "cws_inorganics", delete_dsn = TRUE, quiet = TRUE)
-  message("Wrote ", csv_path, " and ", gpkg_path)
+  message("Wrote ", csv_path, ", ", panel_path, " and ", gpkg_path)
 
   invisible(estimates)
 }

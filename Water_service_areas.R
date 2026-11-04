@@ -112,8 +112,7 @@ sum(pws_df$adjusted_total_population_served[!is.na(pws_df$asavg20062011)], na.rm
 # what pct of total population is represented by boundary and inorganic contaminants data?
 
 
-
-
-
+# try loading in data from SY4 report
+trichloroethane <- read.delim(file = "Test_data_files/Water_quality/_syr4_phasechem_1-111-trichloroethane-to-atrazine/SUMMARY_ANALYTE_1-1-1-TRICHLOROETHANE.txt", header = TRUE)
 
 
